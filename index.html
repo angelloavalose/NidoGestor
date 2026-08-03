@@ -2815,7 +2815,7 @@ async function publicarDatosBPs(colaboradores, fechaCorteGlobal, publicadoPor, o
     }
   }
 
-  // 3. Escribir meta al final (esto es lo que dispara la actualización en los BPs vía onSnapshot)
+  // 3. Escribir meta ANTES de borrar huérfanos (dispara actualización en BPs)
   reportar("Finalizando publicación...");
   const metaRef = doc(db, BASE_PUBLICADA_COLLECTION, "meta");
   await conTimeout(fb.setDoc(metaRef, {
@@ -2825,6 +2825,27 @@ async function publicarDatosBPs(colaboradores, fechaCorteGlobal, publicadoPor, o
     publicadoEn: new Date().toISOString(),
     publicadoPor: publicadoPor || "admin",
   }), 20000, "Tiempo agotado al finalizar la publicación.");
+
+  // 4. Borrar chunks huérfanos de publicaciones anteriores (best-effort, sin bloquear)
+  try {
+    const MAX_CHUNKS_POSIBLES = 300;
+    if (totalChunks < MAX_CHUNKS_POSIBLES) {
+      reportar("Limpiando chunks anteriores...");
+      let batchBorrar = fb.batch();
+      let ops = 0;
+      for (let i = totalChunks; i < MAX_CHUNKS_POSIBLES; i++) {
+        batchBorrar.delete(doc(db, BASE_PUBLICADA_COLLECTION, `chunk_${i}`));
+        ops++;
+        if (ops >= 400) {
+          await conTimeout(batchBorrar.commit(), 15000, "Timeout limpieza");
+          batchBorrar = fb.batch(); ops = 0;
+        }
+      }
+      if (ops > 0) await conTimeout(batchBorrar.commit(), 15000, "Timeout limpieza");
+    }
+  } catch (e) {
+    console.warn("Limpieza de chunks huérfanos falló (no crítico):", e.message);
+  }
 }
 
 // Hook: escucha la publicación en Firestore y arma colaboradores + fechaCorteGlobal automáticamente
